@@ -6,7 +6,6 @@
 using namespace std;
 
 int main() {
-    // Инициализация регистров для 6 варианта
     uint16_t rlz1 = 0x5B5D;  // 15-битный регистр 
     uint64_t rlz2[2] = {0x2D952AAAAAA, 0x36D6AA};  // 106-битный регистр 
 
