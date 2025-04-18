@@ -1,74 +1,91 @@
 #include <iostream>
 #include <fstream>
+#include <cstdint>
+#include <cstring>
+
 using namespace std;
 
 int main() {
-    long long int mask; // Результат маскирования одного блока (64 бита)
-    long long int data; // Один блок исходных данных (64 бита)
-
-    // Рекуррентная линия задержки 1 (РЛЗ1)
-    unsigned short rlz1 = 0x5B5D;
-
-    // Рекуррентная линия задержки 2 (РЛЗ2)
-    unsigned long long rlz2[2] = {
-        0x2D952AAAAAA,  
-        0x36D6AA         
-    };
-
-    unsigned long long gamma = 0; // 64-битная псевдослучайная последовательность (ПСП)
-    int bit_gamma = 0;            // Один бит ПСП, вычисляемый на каждом такте
-    int buffer = 0;               // Для переноса бита между частями rlz2 при сдвиге
+    // Инициализация регистров для 6 варианта
+    uint16_t rlz1 = 0x5B5D;  // 15-битный регистр 
+    uint64_t rlz2[2] = {0x2D952AAAAAA, 0x36D6AA};  // 106-битный регистр 
 
     const char* inputFileName = "lb.txt";     
     const char* outputFileName = "lb_sh.txt";
 
-    // Открытие файлов в бинарном режиме
     ifstream in(inputFileName, ios::binary);
     ofstream out(outputFileName, ios::binary);
 
     if (!in || !out) {
-        cerr << "Ошибка открытия файлов.\n";
+        cerr << "Ошибка открытия файлов!" << endl;
         return 1;
     }
 
-    // Поблочное чтение и шифрование по 64 бита
-    while (in.read((char*)&data, sizeof(long long int))) {
-        gamma = 0; // Обнуляем ПСП на каждый блок
+    // Переменные для обработки данных
+    uint64_t dataBlock;
+    uint64_t gamma;
+    uint8_t bit_gamma;
+    uint8_t buffer;
 
-        // Генерация 64-битной ПСП
+    // Обработка файла блоками по 8 байт
+    while (in.read(reinterpret_cast<char*>(&dataBlock), sizeof(uint64_t))) {
+        gamma = 0;
+
+        // Генерация 64-битной гаммы
         for (int i = 0; i < 64; i++) {
-            gamma <<= 1; // Освобождаем место для нового бита
+            gamma <<= 1;
 
-            // Вычисление ПСП из РЛЗ1 
-            int bit1 = ((rlz1 >> 14) ^ (rlz1 >> 3)) & 0x1;
+            // Вычисление бита для rlz1 
+            bit_gamma = ((rlz1 >> 14) ^ (rlz1 >> 3)) & 0x1;
+            rlz1 = (rlz1 << 1) | bit_gamma;
 
-            // Вычисление ПСП из РЛЗ2
-            int bit2 = ((rlz2[1] >> 41) ^ (rlz2[0] >> 14)) & 0x1;
+            // Вычисление бита для rlz2 
+            uint8_t bit2 = ((rlz2[1] >> 41) ^ (rlz2[0] >> 14)) & 0x1;
 
-            // Комбинирование ПСП (бит гамма)
-            bit_gamma = bit1 ^ bit2; 
-            gamma |= bit_gamma;      
+            // Сдвиг 106-битного регистра
+            buffer = (rlz2[0] >> 63) & 0x1;
+            rlz2[0] = (rlz2[0] << 1) | (rlz2[1] >> 41);
+            rlz2[1] = (rlz2[1] << 1) | bit2;
 
-            // Обновление состояния РЛЗ1
-            rlz1 <<= 1;     
-            rlz1 |= bit1;   
-
-            // Обновление состояния РЛЗ2
-            buffer = (rlz2[1] >> 41) & 0x1; // Сохраняем старший бит rlz2[1] перед сдвигом
-            rlz2[1] <<= 1; // Сдвиг старшей части
-            if (rlz2[0] & (1ULL << 63)) rlz2[1] |= 1;
-            rlz2[0] <<= 1;
-            rlz2[0] |= bit2; 
+            // Комбинирование битов
+            gamma |= (bit_gamma ^ bit2);
         }
 
-        // Маскирование данных и запись в выходной файл
-        mask = data ^ gamma;
-        out.write((char*)&mask, sizeof(long long int));
+        // Маскирование данных
+        uint64_t maskedBlock = dataBlock ^ gamma;
+        out.write(reinterpret_cast<char*>(&maskedBlock), sizeof(uint64_t));
     }
 
+    // Обработка последнего блока (если размер файла не кратен 8 байтам)
+    streamsize remainingBytes = in.gcount();
+    if (remainingBytes > 0) {
+        uint64_t lastBlock = 0;
+        memcpy(&lastBlock, reinterpret_cast<char*>(&dataBlock), remainingBytes);
+
+        gamma = 0;
+        // Повторная генерация гаммы для последнего блока
+        for (int i = 0; i < 64; i++) {
+            gamma <<= 1;
+            bit_gamma = ((rlz1 >> 14) ^ (rlz1 >> 3)) & 0x1;
+            rlz1 = (rlz1 << 1) | bit_gamma;
+
+            uint8_t bit2 = ((rlz2[1] >> 41) ^ (rlz2[0] >> 14)) & 0x1;
+            buffer = (rlz2[0] >> 63) & 0x1;
+            rlz2[0] = (rlz2[0] << 1) | (rlz2[1] >> 41);
+            rlz2[1] = (rlz2[1] << 1) | bit2;
+
+            gamma |= (bit_gamma ^ bit2);
+        }
+
+        // Маскирование последнего блока
+        uint64_t lastMasked = lastBlock ^ gamma;
+        out.write(reinterpret_cast<char*>(&lastMasked), remainingBytes);
+    }
+
+    // Закрытие файлов
     in.close();
     out.close();
 
-    cout << "Файл успешно зашифрован и сохранён как: " << outputFileName << "\n";
+    cout << "Файл зашифрован" << endl;
     return 0;
 }
